@@ -78,3 +78,67 @@ def _normalize_match(groups: tuple[str, ...]) -> str | None:
 def canonical(phone: str) -> str:
     """비교용 캐노니컬 형태(숫자만)."""
     return re.sub(r"\D", "", phone or "")
+
+
+# 회사명 컨텍스트 추출에서 사용할 키워드 (라벨이 있으면 강한 신호)
+_LABEL_KEYWORDS = (
+    "대표전화", "대표번호", "본사", "본점", "전화", "연락처", "TEL", "tel",
+    "Tel", "T.", "T :", "T:", "고객센터", "문의", "상담",
+)
+
+
+def extract_phones_with_context(
+    text: str,
+    company_name: str = "",
+    radius: int = 500,
+) -> list[str]:
+    """텍스트에서 전화번호를 추출하되, **회사명 또는 명시적 전화 라벨 주변**에 있는
+    번호만 채택한다.
+
+    푸터·헤더에 박힌 사이트 자체 대표번호(예: 잡코리아 1588-9350)가 페이지 텍스트에
+    있어도 회사명 근처가 아니라면 채택하지 않는다.
+
+    Args:
+        text: 정규화 안 된 페이지 텍스트
+        company_name: 회사명. 빈 문자열이면 라벨만 검사
+        radius: 회사명/라벨 위치 좌우 N자 안에 있는 번호만 인정
+
+    Returns:
+        정규화된 전화번호 리스트 (순서·중복 제거)
+    """
+    if not text:
+        return []
+
+    # 회사명·라벨이 등장하는 모든 위치를 모음
+    anchor_positions: list[int] = []
+    if company_name:
+        # 회사명의 핵심 토큰만 (괄호·"(주)"·공백 제거)
+        norm_name = _NAME_TOKEN_RE.sub("", company_name)
+        if norm_name:
+            for m in re.finditer(re.escape(norm_name), text):
+                anchor_positions.append(m.start())
+    for kw in _LABEL_KEYWORDS:
+        for m in re.finditer(re.escape(kw), text):
+            anchor_positions.append(m.start())
+
+    if not anchor_positions:
+        # 회사명·라벨 어디에도 없으면 컨텍스트 신호가 약함 → 빈 결과
+        # (호출자가 fallback으로 전체 추출을 시도할 수 있음)
+        return []
+
+    # 각 anchor 주변 텍스트에서 번호 추출
+    found: list[str] = []
+    seen: set[str] = set()
+    for pos in anchor_positions:
+        start = max(0, pos - radius)
+        end = min(len(text), pos + radius)
+        window = text[start:end]
+        for ph in extract_phones(window):
+            if ph not in seen:
+                seen.add(ph)
+                found.append(ph)
+    return found
+
+
+_NAME_TOKEN_RE = re.compile(r"\(주\)|주식회사|㈜|\(유\)|유한회사|\s+")
+

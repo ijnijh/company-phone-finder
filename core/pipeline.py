@@ -122,11 +122,11 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
         if normalized and phone_mod.is_corporate(normalized):
             by_source["naver_local"] = [normalized]
 
-    # 2-2) 홈페이지
+    # 2-2) 홈페이지 — 회사명을 함께 전달해 푸터 노이즈 차단
     try:
         homepage_url = naver_web.find_homepage(company)
         if homepage_url:
-            phones = company_homepage.fetch_phones(homepage_url)
+            phones = company_homepage.fetch_phones(homepage_url, company_name=company)
             if phones:
                 by_source["homepage"] = phones
                 log_fn(f"[{company}] 홈페이지({homepage_url}) 후보 {len(phones)}건")
