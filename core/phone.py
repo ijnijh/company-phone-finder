@@ -112,11 +112,11 @@ _LABEL_KEYWORDS = (
 
 # 번호 직전·직후에 등장하면 그 번호를 후보에서 제외할 키워드 (오인 차단)
 # - 팩스: 일반적으로 회사 페이지에 TEL과 함께 표기됨
-# - 부서 직통: 본사 대표가 아닌 단일 부서 라인
+# - 부서 직통·지점·센터: 본사 대표가 아닌 단일 부서 라인
 _EXCLUSION_NEAR_KEYWORDS = (
     # FAX
     "FAX", "fax", "Fax", "F.", "F :", "F:", "팩스",
-    # 부서 직통 (영업·마케팅·인사·구매·총무·홍보·재무·기술 등)
+    # 부서 직통
     "영업부", "영업팀", "영업본부", "영업담당",
     "마케팅부", "마케팅팀", "마케팅담당",
     "인사부", "인사팀", "인사담당", "채용담당", "채용문의",
@@ -127,6 +127,19 @@ _EXCLUSION_NEAR_KEYWORDS = (
     "기술부", "기술팀", "기술지원",
     "AS", "A/S", "에이에스", "사후관리",
     "물류부", "물류팀", "배송문의",
+    # 지점·센터·물류센터·사업장 (본사가 아닌 지점/터미널 직통)
+    "지점", "지사", "영업소", "출장소",
+    "센터", "물류센터", "터미널", "허브",
+    "사업장", "사업소", "공장", "연구소",
+    "대리점", "AGENCY", "Agency",
+)
+
+
+# "본사"/"대표전화" 등 라벨 직후 번호에 강한 가산점 — 회사 대표번호 신호
+_HQ_LABELS = (
+    "본사", "본점", "대표전화", "대표번호", "대표 전화", "대표 번호",
+    "본사 TEL", "본사 Tel", "본사 tel", "본사TEL", "본사Tel", "본사tel",
+    "Headquarters", "HEADQUARTERS", "HQ ",
 )
 
 # 번호 **직전 좌측** N자에 위 키워드가 있으면 제외 (한국·영문 표기는 라벨이 번호 앞에 옴)
@@ -188,4 +201,30 @@ def extract_phones_with_context(
 
 
 _NAME_TOKEN_RE = re.compile(r"\(주\)|주식회사|㈜|\(유\)|유한회사|\s+")
+
+
+def extract_hq_phones(text: str, radius: int = 60) -> list[str]:
+    """텍스트에서 '본사'/'대표전화' 라벨 직후 N자 안에 있는 번호만 추출.
+
+    동원로엑스 contact us 페이지처럼 "본사 02-6363-2600" 다음 줄에 여러 지점
+    번호가 줄지어 박혀있는 경우, 본사 라벨 옆 번호만 우선 채택하기 위함.
+
+    검색 윈도우는 라벨 직후 좁게(기본 60자) — 라벨이 옆 번호와 멀리 떨어져
+    있으면 의도된 본사 번호가 아닐 가능성이 높다.
+    """
+    if not text:
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for label in _HQ_LABELS:
+        for lm in re.finditer(re.escape(label), text):
+            window_start = lm.end()
+            window_end = min(len(text), window_start + radius)
+            window = text[window_start:window_end]
+            # 윈도우 안의 모든 번호 (FAX/지점 등 제외 자동 적용)
+            for ph in extract_phones(window):
+                if ph not in seen:
+                    seen.add(ph)
+                    found.append(ph)
+    return found
 

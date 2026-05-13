@@ -21,6 +21,7 @@ from selectolax.parser import HTMLParser
 from core.blacklist import filter_phones
 from core.phone import (
     canonical,
+    extract_hq_phones,
     extract_phones,
     extract_phones_with_context,
     is_corporate,
@@ -101,7 +102,13 @@ def fetch_phones(url: str, company_name: str = "", timeout: float = 8.0) -> list
         page_bytes, page_tree, page_text = _fetch(cu, timeout)
         if page_tree is None:
             continue
-        # ① contact 페이지의 회사명 컨텍스트 (가장 신뢰)
+        # ⓪ "본사"/"대표전화" 라벨 직후 번호 — contact 페이지의 최강 신호
+        #    (여러 지점·센터 번호가 같이 박혀있을 때 본사만 골라내기)
+        if page_text:
+            hq = extract_hq_phones(page_text, radius=60)
+            if hq:
+                _ingest(hq)
+        # ① contact 페이지의 회사명 컨텍스트
         if page_text:
             ctx = extract_phones_with_context(page_text, company_name=company_name, radius=400)
             if ctx:
@@ -112,16 +119,19 @@ def fetch_phones(url: str, company_name: str = "", timeout: float = 8.0) -> list
         _ingest(_extract_from_footer(page_tree))
 
     # ─── 메인 페이지 추출 ─────────────────────────────────────────
-    # ③ JSON-LD
+    # ③ 본사 라벨 직후 번호
+    if body_text:
+        _ingest(extract_hq_phones(body_text, radius=60))
+    # ④ JSON-LD
     _ingest(_extract_jsonld_phones(base_html_bytes or b""))
-    # ③ tel: 링크
+    # ④ tel: 링크
     _ingest(_extract_tel_links(tree))
-    # ④ 메인 본문 회사명 컨텍스트
+    # ⑤ 메인 본문 회사명 컨텍스트
     if body_text:
         ctx = extract_phones_with_context(body_text, company_name=company_name, radius=400)
         if ctx:
             _ingest(ctx)
-    # ⑤ 메인 푸터 (가장 후순위 — 그룹 통합 콜센터 같은 노이즈 가능성)
+    # ⑥ 메인 푸터 (가장 후순위 — 그룹 통합 콜센터 같은 노이즈 가능성)
     _ingest(_extract_from_footer(tree))
 
     # 블랙리스트 + 상위 3건
