@@ -57,6 +57,26 @@ if naver_id and naver_secret:
     st.sidebar.success("네이버 API 키 OK")
 else:
     st.sidebar.error("NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 미설정")
+
+# Claude AI 추출 상태
+anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+if anthropic_key:
+    st.sidebar.success("Claude AI 추출 활성화 (정확도 ↑)")
+else:
+    st.sidebar.info("Claude AI 추출 비활성화 (선택)")
+    with st.sidebar.expander("AI 추출 추가하기 (강력 추천)"):
+        st.markdown(
+            "**효과**: 홈페이지 페이지 내용을 Claude가 직접 분석해 본사 대표번호를 추출. "
+            "정규식 룰의 사각지대(부서/지점 라벨·통합 콜센터·잘못된 페이지 매칭)를 메움.\n\n"
+            "**비용**: 100개 회사당 약 ₩700~1000 (Haiku 4.5 + 프롬프트 캐싱)\n\n"
+            "**설정**:\n"
+            "1. https://console.anthropic.com 가입 + API 키 발급 (무료 크레딧 제공)\n"
+            "2. Streamlit Cloud의 Manage app → Settings → Secrets에 추가:\n"
+            "   ```\n"
+            "   ANTHROPIC_API_KEY = \"sk-ant-...\"\n"
+            "   ```\n"
+            "3. Save → 앱 자동 재시작\n"
+        )
     st.sidebar.markdown(
         """
 1. https://developers.naver.com 에서 애플리케이션 등록
@@ -145,7 +165,14 @@ def _summarize(results: dict[int, dict]) -> dict[str, int]:
 
 
 def _confidence_summary(results: dict[int, dict]) -> dict[str, int]:
-    counts = {"검증됨": 0, "지도확인": 0, "홈페이지확인": 0, "잡포털확인": 0, "찾지못함": 0}
+    counts = {
+        "검증됨": 0,
+        "AI확인": 0,
+        "지도확인": 0,
+        "홈페이지확인": 0,
+        "잡포털확인": 0,
+        "찾지못함": 0,
+    }
     for r in results.values():
         c = r.get("신뢰도", "")
         if c in counts:
@@ -191,12 +218,13 @@ if st.button("🔎 검색 시작", type="primary"):
     # 신뢰도(전화번호 교차검증) 분포
     conf = _confidence_summary(results_main)
     st.markdown("**전화번호 신뢰도 분포**")
-    ccols = st.columns(5)
-    ccols[0].metric("검증됨", conf["검증됨"], help="2개 이상 소스 일치 또는 매칭확정+ICP양성+권위소스 격상")
-    ccols[1].metric("지도확인", conf["지도확인"], help="네이버 지도 단독")
-    ccols[2].metric("홈페이지확인", conf["홈페이지확인"], help="공식 홈페이지 단독")
-    ccols[3].metric("잡포털확인", conf["잡포털확인"], help="잡코리아·사람인 단독")
-    ccols[4].metric("찾지못함", conf["찾지못함"])
+    ccols = st.columns(6)
+    ccols[0].metric("검증됨", conf["검증됨"], help="2개 이상 소스 일치 또는 권위소스 격상")
+    ccols[1].metric("AI확인", conf["AI확인"], help="Claude AI 단독 (홈페이지 텍스트 분석)")
+    ccols[2].metric("지도확인", conf["지도확인"], help="네이버 지도 단독")
+    ccols[3].metric("홈페이지확인", conf["홈페이지확인"], help="공식 홈페이지 단독")
+    ccols[4].metric("잡포털확인", conf["잡포털확인"], help="잡코리아·사람인 단독")
+    ccols[5].metric("찾지못함", conf["찾지못함"])
 
     # 결과 미리보기
     rows = []

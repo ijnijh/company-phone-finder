@@ -246,6 +246,40 @@ def _extract_from_footer(tree: HTMLParser) -> list[str]:
     return out
 
 
+def fetch_text(url: str, company_name: str = "", timeout: float = 8.0) -> str:
+    """홈페이지 + (있다면) contact 페이지의 본문 텍스트를 연결해 반환.
+
+    LLM에 보낼 원본 텍스트 제공용. fetch_phones 와 달리 추출·필터링을 안 함.
+    """
+    if not url:
+        return ""
+    chunks: list[str] = []
+
+    _, tree, body_text = _fetch(url, timeout)
+    if body_text:
+        chunks.append(body_text)
+
+    # contact 페이지도 함께 (LLM이 본사/지점 판단)
+    if tree is not None:
+        contact_urls = _discover_contact_urls(tree, url)
+        if not contact_urls:
+            origin = _origin(url)
+            if origin:
+                contact_urls = [urljoin(origin, p) for p in _STATIC_PATHS]
+        visited: set[str] = {url}
+        for cu in contact_urls:
+            if len(visited) >= _MAX_PAGES:
+                break
+            if cu in visited or not cu:
+                continue
+            visited.add(cu)
+            _, _, page_text = _fetch(cu, timeout)
+            if page_text:
+                chunks.append(f"\n\n--- [{cu}] ---\n\n{page_text}")
+
+    return "\n".join(chunks)
+
+
 def _fetch(url: str, timeout: float):
     """URL fetch → (raw_bytes, HTMLParser, body_text)."""
     try:

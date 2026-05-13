@@ -26,6 +26,19 @@ streamlit run app.py
 3. 발급된 Client ID / Client Secret을 `.env`에 붙여넣기
 4. 무료 한도: 25,000 calls/day (업체 100개 처리 시 약 200콜 사용)
 
+## Claude AI 추출 (선택, 강력 추천)
+
+홈페이지 페이지 텍스트를 Claude AI에게 분석시켜 본사 대표번호를 직접 추출합니다.
+정규식 룰의 사각지대(부서/지점 라벨 변형·통합 콜센터·잘못된 페이지 매칭)를 메우는 가장 강력한 방법입니다.
+
+1. https://console.anthropic.com 가입 → "API Keys" → "Create Key"
+2. 발급된 키(`sk-ant-...`)를 `.env` 또는 Streamlit Cloud Secrets에 추가:
+   ```
+   ANTHROPIC_API_KEY=sk-ant-여기에...
+   ```
+3. 비용: Haiku 4.5 + 프롬프트 캐싱으로 **100개 회사당 약 ₩700~1000**. 무료 크레딧 $5 제공.
+4. 키 미설정 시 LLM 단계는 자동으로 건너뜀 (기존 정규식 추출만 동작).
+
 ## 입력 엑셀 형식
 
 - **A열 = 업체명** (필수)

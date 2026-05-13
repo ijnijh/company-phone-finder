@@ -13,7 +13,14 @@ from core import phone as phone_mod
 from core.entity_matcher import MatchResult, ScoredCandidate, select as entity_select
 from core.excel_io import ExcelInput, InputRow
 from core.icp import IcpConfig, load_config
-from core.sources import company_homepage, jobkorea, naver_local, naver_web, saramin
+from core.sources import (
+    company_homepage,
+    jobkorea,
+    llm_extractor,
+    naver_local,
+    naver_web,
+    saramin,
+)
 from core.verifier import VerifyResult, decide
 
 log = logging.getLogger(__name__)
@@ -153,7 +160,25 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
     if all_home_phones:
         by_source["homepage"] = all_home_phones[:3]
 
-    # 2-3) 잡코리아·사람인 — ICP 양성 신호가 있을 때만 (음식점·미용실 노이즈 차단)
+    # 2-3) LLM 추출 — Claude AI가 홈페이지 텍스트를 직접 분석해 본사 대표번호 추출
+    #      (정규식 룰의 사각지대 — 라벨 변형·그룹 콜센터·잘못된 페이지 매칭 등 해결)
+    if llm_extractor.is_available() and homepage_urls:
+        try:
+            llm_text_chunks: list[str] = []
+            for hu in homepage_urls[:2]:  # 최대 2개 URL 텍스트 결합
+                text_blob = company_homepage.fetch_text(hu, company_name=company)
+                if text_blob:
+                    llm_text_chunks.append(text_blob)
+            if llm_text_chunks:
+                combined_text = "\n\n".join(llm_text_chunks)
+                llm_phone = llm_extractor.extract_phone_with_llm(company, combined_text)
+                if llm_phone:
+                    by_source["llm"] = [llm_phone]
+                    log_fn(f"[{company}] LLM 추출 성공: {llm_phone}")
+        except Exception as e:
+            log_fn(f"[{company}] LLM 추출 오류: {e}")
+
+    # 2-4) 잡코리아·사람인 — ICP 양성 신호가 있을 때만 (음식점·미용실 노이즈 차단)
     has_positive_icp = chosen.detail.get("icp_pos_keywords", 0) >= 1
     if has_positive_icp:
         try:
@@ -172,13 +197,13 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
     verify: VerifyResult = decide(by_source)
 
     # 격상 룰: 매칭이 확실하고(매칭확정) ICP 양성 신호가 충분하며
-    # 권위 소스(네이버 지도 또는 공식 홈페이지)가 번호를 단독 반환한 경우,
+    # 권위 소스(LLM, 네이버 지도, 또는 공식 홈페이지)가 번호를 단독 반환한 경우,
     # 교차검증된 것에 준하는 신뢰로 격상한다.
     promoted = False
     if (
         match.status == "매칭확정"
         and chosen.detail.get("icp_pos_keywords", 0) >= 1
-        and verify.confidence in ("지도확인", "홈페이지확인")
+        and verify.confidence in ("AI확인", "지도확인", "홈페이지확인")
     ):
         verify.confidence = "검증됨"
         promoted = True
@@ -189,6 +214,10 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
 
     # 진단(diagnostics): 어디서 어떻게 뽑혔는지 추적 가능하도록 비고에 합쳐 기록
     diag_parts = []
+    if by_source.get("llm"):
+        diag_parts.append(f"AI={by_source['llm'][0]}")
+    elif llm_extractor.is_available() and homepage_urls:
+        diag_parts.append("AI=∅")
     if by_source.get("naver_local"):
         diag_parts.append(f"지도={by_source['naver_local'][0]}")
     else:
@@ -277,6 +306,7 @@ def _failure_result(row: InputRow, note: str) -> CompanyResult:
 
 def _source_label(source: str) -> str:
     return {
+        "llm": "AI",
         "naver_local": "지도",
         "homepage": "홈페이지",
         "jobkorea": "잡코리아",

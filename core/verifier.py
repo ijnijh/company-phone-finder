@@ -7,7 +7,9 @@ from core.phone import canonical, normalize
 
 
 # 소스명 → 가중치 (높을수록 신뢰)
+# llm은 페이지 맥락을 이해한 결과라 가장 신뢰
 SOURCE_WEIGHTS: dict[str, int] = {
+    "llm": 4,
     "naver_local": 3,
     "homepage": 2,
     "jobkorea": 1,
@@ -64,7 +66,7 @@ def decide(by_source: dict[str, list[str]]) -> VerifyResult:
 
 
 _JOB_PORTAL_SOURCES = {"jobkorea", "saramin"}
-_AUTHORITY_SOURCES = {"naver_local", "homepage"}
+_AUTHORITY_SOURCES = {"llm", "naver_local", "homepage"}
 
 
 def _confidence_label(best: dict) -> str:
@@ -92,6 +94,8 @@ def _confidence_label(best: dict) -> str:
 
     # 단일 소스
     src = sources[0]
+    if src == "llm":
+        return "AI확인"
     if src == "naver_local":
         return "지도확인"
     if src == "homepage":
