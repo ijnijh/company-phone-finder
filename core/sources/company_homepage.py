@@ -1,16 +1,17 @@
-"""기업 홈페이지에서 대표전화 후보 추출.
+"""기업 홈페이지에서 대표전화 후보 추출 (3차 강화, 2026-05-13).
 
-핵심 전략(2026-05-13 강화):
-1) 루트 페이지 fetch → 즉시 푸터·연락처 영역의 번호 추출 시도
-2) 페이지의 모든 <a> 태그를 분석해 "연락처/Contact/문의/오시는길/회사소개" 같은
-   링크를 동적으로 찾아낸다 (정해진 경로 목록에만 의존하지 않음 — 동원로엑스처럼
-   표준 경로를 안 쓰는 사이트도 잡아내기 위함)
-3) 발견된 contact 후보 URL들을 최대 3개까지 추가 fetch
-4) 회사명·라벨 컨텍스트 추출로 푸터의 무관 번호 노이즈 차단
-5) 050X·010·블랙리스트 번호 제거
+전략:
+1) **JSON-LD telephone** 메타데이터 우선 — schema.org 표준이라 가장 신뢰
+2) **<a href="tel:...">** 직접 추출 — 모바일 친화 사이트는 거의 다 보유
+3) **푸터 영역 우선 추출** — <footer>, .footer, #footer 안의 corporate 번호는
+   라벨·회사명 컨텍스트 없이도 채택 (푸터의 정의가 회사 정보 영역)
+4) 본문 영역에서는 회사명/라벨 컨텍스트로 추출
+5) contact 페이지 동적 탐색은 보조적으로
+6) FAX/부서 라벨 옆 번호는 제외, 블랙리스트 적용
 """
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urljoin, urlparse
 
@@ -19,38 +20,42 @@ from selectolax.parser import HTMLParser
 
 from core.blacklist import filter_phones
 from core.phone import (
+    canonical,
     extract_phones,
     extract_phones_with_context,
     is_corporate,
+    normalize,
 )
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 _HEADERS = {"User-Agent": _UA, "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.5"}
 
-# 정적 fallback 경로 (사이트가 위 동적 탐색에서 빠질 때 시도)
 _STATIC_PATHS = [
     "/contact", "/contact-us", "/contactus", "/about", "/about-us",
     "/company", "/intro", "/회사소개", "/연락처", "/오시는길",
 ]
 
-# contact 링크 발견용 키워드 (a 태그의 텍스트 또는 href에서 매칭)
 _CONTACT_KEYWORDS = (
     "연락처", "오시는길", "오시는 길", "찾아오시는길", "찾아오시는 길",
     "문의", "고객문의", "고객지원", "고객센터", "지원센터",
     "회사소개", "회사 소개", "기업소개", "기업 정보", "회사정보",
     "본사", "본점", "사무소",
-    "contact", "contactus", "about", "aboutus", "company", "location",
+    "contact", "contactus", "contact us", "about", "aboutus", "about us",
+    "company", "location",
+)
+
+_FOOTER_SELECTORS = (
+    "footer", ".footer", "#footer", ".site-footer", ".global-footer",
+    ".gfooter", "[role='contentinfo']", ".foot", "#foot",
 )
 
 _MAX_BYTES = 1_500_000
-_MAX_PAGES = 4  # 루트 + contact 후보 3개
+_MAX_PAGES = 4
 
 
 def fetch_phones(url: str, company_name: str = "", timeout: float = 8.0) -> list[str]:
-    """홈페이지에서 회사 대표번호 후보를 정규화 문자열 리스트로 반환.
-
-    company_name이 주어지면 회사명 컨텍스트 검사로 푸터 노이즈를 차단한다.
-    """
+    """홈페이지에서 회사 대표번호 후보 반환. 메인 페이지에서 발견 시 contact 페이지
+    추가 fetch는 생략 (속도 + 노이즈 최소화)."""
     if not url:
         return []
 
@@ -64,94 +69,199 @@ def fetch_phones(url: str, company_name: str = "", timeout: float = 8.0) -> list
             seen.add(ph)
             collected.append(ph)
 
-    base_html, base_text = _fetch(url, timeout)
-    if base_text is None:
+    base_html_bytes, tree, body_text = _fetch(url, timeout)
+    if tree is None:
         return []
 
-    # 1) 루트 텍스트에서 컨텍스트 추출 우선, 신호 없으면 fallback으로 전체 추출
-    primary = extract_phones_with_context(base_text, company_name=company_name, radius=400)
-    if primary:
-        _ingest(primary)
-    else:
-        # 컨텍스트 신호가 없으면 페이지 전체에서 시도 (단, 1588/1577 같은 대표번호는
-        # 사이트 자체 번호일 가능성을 블랙리스트로 차단)
-        _ingest(extract_phones(base_text))
+    # 1) JSON-LD telephone (가장 신뢰)
+    _ingest(_extract_jsonld_phones(base_html_bytes or b""))
 
-    # 2) <a> 태그에서 contact 후보 링크 동적 발견
-    contact_urls = _discover_contact_urls(base_html, url)
+    # 2) tel: 링크
+    _ingest(_extract_tel_links(tree))
 
-    # 3) 못 찾았으면 정적 경로 fallback
-    if not contact_urls:
-        origin = _origin(url)
-        if origin:
-            contact_urls = [urljoin(origin, p) for p in _STATIC_PATHS]
+    # 3) 푸터 영역 우선 추출 (회사명/라벨 컨텍스트 없이도 채택)
+    _ingest(_extract_from_footer(tree))
 
-    # 4) 후보 URL을 fetch (최대 _MAX_PAGES - 1개)
-    visited: set[str] = {url}
-    for cu in contact_urls:
-        if len(visited) >= _MAX_PAGES:
-            break
-        if cu in visited or not cu:
-            continue
-        visited.add(cu)
-        _, text = _fetch(cu, timeout)
-        if not text:
-            continue
-        ctx = extract_phones_with_context(text, company_name=company_name, radius=400)
+    # 4) 본문에서 회사명/라벨 컨텍스트 추출
+    if body_text:
+        ctx = extract_phones_with_context(body_text, company_name=company_name, radius=400)
         if ctx:
             _ingest(ctx)
-        else:
-            _ingest(extract_phones(text))
 
-    # 5) 블랙리스트 + 상위 3건
+    # 5) 그래도 빈 결과면 contact 페이지 탐색 (보조)
+    if not collected:
+        contact_urls = _discover_contact_urls(tree, url)
+        if not contact_urls:
+            origin = _origin(url)
+            if origin:
+                contact_urls = [urljoin(origin, p) for p in _STATIC_PATHS]
+
+        visited: set[str] = {url}
+        for cu in contact_urls:
+            if len(visited) >= _MAX_PAGES:
+                break
+            if cu in visited or not cu:
+                continue
+            visited.add(cu)
+            page_bytes, page_tree, page_text = _fetch(cu, timeout)
+            if page_tree is None:
+                continue
+            _ingest(_extract_jsonld_phones(page_bytes or b""))
+            _ingest(_extract_tel_links(page_tree))
+            _ingest(_extract_from_footer(page_tree))
+            if page_text:
+                ctx = extract_phones_with_context(page_text, company_name=company_name, radius=400)
+                if ctx:
+                    _ingest(ctx)
+
+    # 6) 블랙리스트 + 상위 3건
     return filter_phones(collected)[:3]
 
 
-def _fetch(url: str, timeout: float) -> tuple[HTMLParser | None, str | None]:
-    """URL에서 HTML 파서와 본문 텍스트를 함께 반환."""
+# ─────────────────────────── 추출 헬퍼 ───────────────────────────
+
+
+def _extract_jsonld_phones(html_bytes: bytes) -> list[str]:
+    """HTML 내 <script type="application/ld+json"> 블록에서 telephone 필드 추출."""
+    if not html_bytes:
+        return []
+    try:
+        tree = HTMLParser(html_bytes)
+    except Exception:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for node in tree.css('script[type="application/ld+json"]'):
+        raw = node.text() or ""
+        if not raw.strip():
+            continue
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        for tel in _walk_jsonld_for_telephone(data):
+            ph = _normalize_intl(tel)
+            if ph and ph not in seen:
+                seen.add(ph)
+                out.append(ph)
+    return out
+
+
+def _normalize_intl(raw: str) -> str | None:
+    """+82(국가코드) 포함 표기를 0XX 형식으로 정규화한 뒤 normalize()."""
+    if not raw:
+        return None
+    s = raw.strip()
+    # +82-2-..., +82 2 ..., 0082-2-..., 82-2-... 모두 처리
+    s = re.sub(r"^(?:\+?82|0082)[-\s.)]?", "0", s)
+    return normalize(s)
+
+
+def _walk_jsonld_for_telephone(node) -> list[str]:
+    """재귀적으로 dict/list를 순회하며 telephone 필드 값을 모은다."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if isinstance(k, str) and k.lower() in ("telephone", "phone", "phonenumber"):
+                if isinstance(v, str):
+                    found.append(v)
+                elif isinstance(v, list):
+                    for x in v:
+                        if isinstance(x, str):
+                            found.append(x)
+            else:
+                found.extend(_walk_jsonld_for_telephone(v))
+    elif isinstance(node, list):
+        for it in node:
+            found.extend(_walk_jsonld_for_telephone(it))
+    return found
+
+
+def _extract_tel_links(tree: HTMLParser) -> list[str]:
+    """<a href="tel:..."> 링크에서 번호 추출."""
+    if not tree:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for node in tree.css('a[href^="tel:"]'):
+        href = (node.attributes.get("href") or "")[len("tel:"):]
+        if not href:
+            continue
+        ph = _normalize_intl(href)
+        if ph and ph not in seen:
+            seen.add(ph)
+            out.append(ph)
+    return out
+
+
+def _extract_from_footer(tree: HTMLParser) -> list[str]:
+    """푸터 영역에서 전화번호 추출. 푸터 정의상 회사 정보 영역이라 라벨/회사명
+    컨텍스트 없이도 채택한다.
+    """
+    if not tree:
+        return []
+    body = tree.body or tree
+
+    text_chunks: list[str] = []
+    for sel in _FOOTER_SELECTORS:
+        try:
+            for node in body.css(sel):
+                t = node.text(separator=" ", strip=True)
+                if t:
+                    text_chunks.append(t)
+        except Exception:
+            continue
+
+    if not text_chunks:
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for chunk in text_chunks:
+        # 푸터 영역은 라벨 없이도 OK, 하지만 FAX/부서 라벨 옆은 여전히 제외
+        for ph in extract_phones(chunk, exclude_labelled=True):
+            if ph not in seen:
+                seen.add(ph)
+                out.append(ph)
+    return out
+
+
+def _fetch(url: str, timeout: float):
+    """URL fetch → (raw_bytes, HTMLParser, body_text)."""
     try:
         with httpx.Client(
             follow_redirects=True, timeout=timeout, headers=_HEADERS, verify=False
         ) as client:
             resp = client.get(url)
             if resp.status_code >= 400:
-                return None, None
+                return None, None, None
             ctype = resp.headers.get("content-type", "")
             if ctype and "html" not in ctype.lower() and "xml" not in ctype.lower():
-                return None, None
+                return None, None, None
             body = resp.content[:_MAX_BYTES]
     except (httpx.HTTPError, httpx.InvalidURL):
-        return None, None
+        return None, None, None
 
     try:
         tree = HTMLParser(body)
-        # script/style 제거
+        # script/style은 텍스트 추출 전 제거 (단, JSON-LD는 raw bytes에서 별도 파싱하므로 OK)
         for node in tree.css("script, style, noscript"):
             node.decompose()
-        # 본문 텍스트 추출
         target = tree.body if tree.body else tree
         text = target.text(separator=" ", strip=True)
     except Exception:
-        return None, None
-
-    return tree, text
+        return None, None, None
+    return body, tree, text
 
 
 def _discover_contact_urls(tree: HTMLParser | None, base_url: str) -> list[str]:
-    """페이지의 모든 <a> 태그에서 contact 키워드를 가진 링크를 추출.
-
-    keyword 매칭 우선순위:
-    - a 태그 텍스트 (연락처 / 오시는길 / 회사소개 / Contact 등)
-    - href 경로 (contact, about, company 포함 여부)
-    """
     if not tree:
         return []
     origin = _origin(base_url)
     if not origin:
         return []
 
-    found: list[tuple[int, str]] = []  # (priority, absolute_url)
-
+    found: list[tuple[int, str]] = []
     for node in tree.css("a[href]"):
         href = (node.attributes.get("href") or "").strip()
         if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
@@ -160,26 +270,21 @@ def _discover_contact_urls(tree: HTMLParser | None, base_url: str) -> list[str]:
             absolute = urljoin(base_url, href)
         except Exception:
             continue
-        # 동일 도메인만
         if _origin(absolute) != origin:
             continue
-
         text = (node.text(strip=True) or "")[:60]
         href_low = href.lower()
         text_low = text.lower()
-
-        # 우선순위 점수: 텍스트에 "연락처/오시는길/문의/회사소개" 등 정확 키워드면 1순위
         priority = 0
         for kw in _CONTACT_KEYWORDS:
             kw_low = kw.lower()
             if kw_low in text_low:
-                priority = max(priority, 3 if kw in ("연락처", "오시는길", "오시는 길", "문의", "contact") else 2)
+                priority = max(priority, 3 if kw in ("연락처", "오시는길", "문의", "contact", "contact us") else 2)
             elif kw_low in href_low:
                 priority = max(priority, 2 if kw in ("contact", "about", "company") else 1)
         if priority > 0:
             found.append((priority, absolute))
 
-    # 점수 높은 순, 중복 제거, 상위 N개
     found.sort(key=lambda x: x[0], reverse=True)
     seen: set[str] = set()
     out: list[str] = []

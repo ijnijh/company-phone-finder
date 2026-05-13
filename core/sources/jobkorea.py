@@ -4,18 +4,20 @@
 주의사항:
 - 잡코리아 사이트 자체 대표번호(1588-9350 등)가 페이지 푸터·헤더에 박혀 있어
   단순 텍스트 추출로는 그것이 회사 번호로 오인됨.
-- 따라서 (a) 알려진 사이트 자체 번호는 블랙리스트로 차단,
-  (b) 회사명 또는 "대표전화" 라벨 주변에 있는 번호만 채택한다.
+- 잡코리아 검색은 부정확해서 검색어와 다른 회사를 첫 결과로 노출하는 경우가
+  많음 (예: "쿠팡로지스틱스서비스" 검색 → "나이스정보통신"). 따라서 회사
+  상세 페이지의 회사명이 검색어와 일치하는지 강제로 검증한다.
 """
 from __future__ import annotations
 
+import re
 from urllib.parse import quote_plus, urljoin
 
 import httpx
 from selectolax.parser import HTMLParser
 
 from core.blacklist import filter_phones
-from core.phone import extract_phones, extract_phones_with_context, is_corporate
+from core.phone import extract_phones_with_context, is_corporate
 
 _BASE = "https://www.jobkorea.co.kr"
 _SEARCH = _BASE + "/Search/?stext={q}&tabType=corp"
@@ -36,18 +38,92 @@ def fetch_phones(company_name: str, timeout: float = 8.0) -> list[str]:
 
             detail_url = _first_company_link(tree)
             if not detail_url:
-                return _extract_safely(tree, company_name)
+                return []  # 상세 페이지 못 찾으면 검색 결과만으론 채택 안 함
 
             full = urljoin(_BASE, detail_url)
             detail_resp = client.get(full)
             if detail_resp.status_code >= 400:
                 return []
             detail_tree = HTMLParser(detail_resp.text)
+
+            # ★ 회사명 강제 검증 — 상세 페이지가 정말 그 회사인지 확인
+            if not _verify_company_match(detail_tree, company_name):
+                return []
+
             return _extract_safely(detail_tree, company_name)
     except (httpx.HTTPError, httpx.InvalidURL):
         return []
     except Exception:
         return []
+
+
+def _verify_company_match(tree: HTMLParser, company_name: str) -> bool:
+    """상세 페이지의 회사명 표시 영역에 검색어 토큰이 등장하는지 검증.
+
+    검사 영역(우선순위):
+    - <title> 태그
+    - <h1>, <h2>, .company-name, .corp-name, [class*="company"] 등 회사명 영역
+    - 페이지 상단 첫 2000자
+
+    검사 토큰: 회사명 정규화 후 전체 + 앞 2글자 약칭.
+    """
+    if not tree:
+        return False
+    tokens = _company_tokens(company_name)
+    if not tokens:
+        return True  # 비정상적 짧은 이름이면 검증 통과
+
+    # 검사할 텍스트 후보 수집
+    haystacks: list[str] = []
+    try:
+        title_node = tree.css_first("title")
+        if title_node:
+            haystacks.append(title_node.text(strip=True))
+    except Exception:
+        pass
+    for sel in ("h1", "h2", ".company-name", ".corp-name",
+                "[class*='company']", "[class*='corp']", "[class*='Corp']"):
+        try:
+            for n in tree.css(sel)[:5]:
+                t = n.text(strip=True)
+                if t:
+                    haystacks.append(t)
+        except Exception:
+            continue
+    # fallback: 페이지 상단 첫 2000자
+    try:
+        body = tree.body or tree
+        head_text = body.text(separator=" ", strip=True)[:2000]
+        haystacks.append(head_text)
+    except Exception:
+        pass
+
+    big = " ".join(haystacks).lower()
+    for t in tokens:
+        if t in big:
+            return True
+    return False
+
+
+_NAME_NOISE = re.compile(r"\(주\)|주식회사|㈜|\(유\)|유한회사")
+
+
+def _company_tokens(name: str) -> set[str]:
+    cleaned = _NAME_NOISE.sub("", name).strip()
+    if not cleaned:
+        return set()
+    out: set[str] = set()
+    low = cleaned.lower()
+    out.add(low)
+    no_space = re.sub(r"\s+", "", low)
+    out.add(no_space)
+    for w in re.split(r"\W+", low):
+        if len(w) >= 2:
+            out.add(w)
+    if len(no_space) >= 4:
+        out.add(no_space[:2])
+        out.add(no_space[:3])
+    return out
 
 
 def _first_company_link(tree: HTMLParser) -> str:

@@ -1,10 +1,12 @@
 """사람인 기업검색 스크래퍼.
 
 # selectors as of 2026-05-13
-jobkorea.py와 동일한 안전 전략: 푸터·헤더 제거 + 회사명/라벨 컨텍스트 추출 + 블랙리스트.
+jobkorea.py와 동일한 안전 전략: 푸터·헤더 제거 + 회사명/라벨 컨텍스트 추출
++ 블랙리스트 + **회사명 강제 검증**.
 """
 from __future__ import annotations
 
+import re
 from urllib.parse import quote_plus, urljoin
 
 import httpx
@@ -31,18 +33,74 @@ def fetch_phones(company_name: str, timeout: float = 8.0) -> list[str]:
             tree = HTMLParser(resp.text)
             detail_url = _first_company_link(tree)
             if not detail_url:
-                return _extract_safely(tree, company_name)
+                return []
 
             full = urljoin(_BASE, detail_url)
             detail_resp = client.get(full)
             if detail_resp.status_code >= 400:
                 return []
             detail_tree = HTMLParser(detail_resp.text)
+
+            if not _verify_company_match(detail_tree, company_name):
+                return []
+
             return _extract_safely(detail_tree, company_name)
     except (httpx.HTTPError, httpx.InvalidURL):
         return []
     except Exception:
         return []
+
+
+def _verify_company_match(tree: HTMLParser, company_name: str) -> bool:
+    if not tree:
+        return False
+    tokens = _company_tokens(company_name)
+    if not tokens:
+        return True
+    haystacks: list[str] = []
+    try:
+        title_node = tree.css_first("title")
+        if title_node:
+            haystacks.append(title_node.text(strip=True))
+    except Exception:
+        pass
+    for sel in ("h1", "h2", ".company-name", ".corp-name",
+                "[class*='company']", "[class*='corp']", "[class*='Corp']"):
+        try:
+            for n in tree.css(sel)[:5]:
+                t = n.text(strip=True)
+                if t:
+                    haystacks.append(t)
+        except Exception:
+            continue
+    try:
+        body = tree.body or tree
+        haystacks.append(body.text(separator=" ", strip=True)[:2000])
+    except Exception:
+        pass
+    big = " ".join(haystacks).lower()
+    return any(t in big for t in tokens)
+
+
+_NAME_NOISE = re.compile(r"\(주\)|주식회사|㈜|\(유\)|유한회사")
+
+
+def _company_tokens(name: str) -> set[str]:
+    cleaned = _NAME_NOISE.sub("", name).strip()
+    if not cleaned:
+        return set()
+    out: set[str] = set()
+    low = cleaned.lower()
+    out.add(low)
+    no_space = re.sub(r"\s+", "", low)
+    out.add(no_space)
+    for w in re.split(r"\W+", low):
+        if len(w) >= 2:
+            out.add(w)
+    if len(no_space) >= 4:
+        out.add(no_space[:2])
+        out.add(no_space[:3])
+    return out
 
 
 def _first_company_link(tree: HTMLParser) -> str:
