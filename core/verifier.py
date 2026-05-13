@@ -63,25 +63,40 @@ def decide(by_source: dict[str, list[str]]) -> VerifyResult:
     )
 
 
+_JOB_PORTAL_SOURCES = {"jobkorea", "saramin"}
+_AUTHORITY_SOURCES = {"naver_local", "homepage"}
+
+
 def _confidence_label(best: dict) -> str:
     """단일·복수 소스 상황을 명시적으로 구분한 라벨.
 
-    여러 소스가 같은 번호를 반환했을 때만 "검증됨". 단일 소스인 경우엔
-    어느 소스에서 발견했는지를 라벨에 그대로 노출해서 사용자가 신뢰도를
-    스스로 판단할 수 있게 한다. (이전 버전의 "의심"은 너무 두루뭉술해서
-    홈페이지 단독 발견 케이스와 잡포털 단독 발견 케이스가 한 통에 묶였음.)
+    - 권위 소스(지도·홈페이지)가 1개 이상 + 다른 소스 1개 이상 일치 → "검증됨"
+    - 잡코리아 + 사람인만 일치(둘 다 채용 DB라 사실상 단일 출처)
+        → "잡포털2중확인" (검증됨보다 약함, 채용 담당자 직통일 가능성)
+    - 단일 소스 → 그 소스의 라벨
+    - 빈 후보 → "찾지못함"
     """
     sources = best["sources"]
-    if len(sources) >= 2:
-        return "검증됨"
     if not sources:
         return "찾지못함"
+
+    has_authority = any(s in _AUTHORITY_SOURCES for s in sources)
+    jobportal_sources = [s for s in sources if s in _JOB_PORTAL_SOURCES]
+
+    if len(sources) >= 2 and has_authority:
+        return "검증됨"
+
+    if len(sources) >= 2 and len(jobportal_sources) >= 2 and not has_authority:
+        # 잡코리아+사람인만 일치 — 독립 검증이 아니므로 격하
+        return "잡포털2중확인"
+
+    # 단일 소스
     src = sources[0]
     if src == "naver_local":
         return "지도확인"
     if src == "homepage":
         return "홈페이지확인"
-    if src in ("jobkorea", "saramin"):
+    if src in _JOB_PORTAL_SOURCES:
         return "잡포털확인"
     return "찾지못함"
 

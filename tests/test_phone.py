@@ -15,10 +15,11 @@ def test_extract_corporate_4digit():
 
 
 def test_extract_multiple_and_dedup():
-    text = "본사 02-1234-5678 / 영업 02-1234-5678 / 팩스 02-1111-2222"
+    """동일 번호 중복 제거. 팩스 라벨 옆 번호는 새 정책상 제외됨."""
+    text = "본사 02-1234-5678 / 안내 02-1234-5678 / 사무실 02-2222-3333"
     found = extract_phones(text)
     assert "02-1234-5678" in found
-    assert "02-1111-2222" in found
+    assert "02-2222-3333" in found
     assert len(found) == 2
 
 

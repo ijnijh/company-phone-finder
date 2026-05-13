@@ -154,8 +154,6 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
     # 격상 룰: 매칭이 확실하고(매칭확정) ICP 양성 신호가 충분하며
     # 권위 소스(네이버 지도 또는 공식 홈페이지)가 번호를 단독 반환한 경우,
     # 교차검증된 것에 준하는 신뢰로 격상한다.
-    # — 동명 후보를 정확히 1개로 좁히고 그 업체가 ICP 적합이라면,
-    #   지도 또는 홈페이지에 박힌 번호는 실무상 사실상 확정으로 봐도 무방.
     promoted = False
     if (
         match.status == "매칭확정"
@@ -169,6 +167,21 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
     candidate_str = "; ".join(p for p, _, _ in verify.candidates[:3])
     sources_str = "+".join(_source_label(s) for s in verify.sources)
 
+    # 진단(diagnostics): 어디서 어떻게 뽑혔는지 추적 가능하도록 비고에 합쳐 기록
+    diag_parts = []
+    if by_source.get("naver_local"):
+        diag_parts.append(f"지도={by_source['naver_local'][0]}")
+    else:
+        diag_parts.append("지도=∅")
+    if by_source.get("homepage"):
+        diag_parts.append(f"홈페이지={by_source['homepage'][0]}")
+    else:
+        diag_parts.append("홈페이지=∅")
+    if by_source.get("jobkorea"):
+        diag_parts.append(f"잡코리아={by_source['jobkorea'][0]}")
+    if by_source.get("saramin"):
+        diag_parts.append(f"사람인={by_source['saramin'][0]}")
+
     notes = []
     if match.note:
         notes.append(match.note)
@@ -176,6 +189,7 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
         notes.append("전화번호 후보 없음")
     if promoted:
         notes.append("단일 권위소스 자동 격상")
+    notes.append("진단: " + " / ".join(diag_parts))
     note = " | ".join(notes)
 
     return CompanyResult(

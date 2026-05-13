@@ -36,10 +36,11 @@ def test_only_saramin_labelled_jobportal():
     assert res.confidence == "잡포털확인"
 
 
-def test_two_jobportals_same_number_verified():
-    """잡포털 두 곳이 동일 번호면 distinct=2 → 검증됨."""
+def test_two_jobportals_same_number_demoted():
+    """잡코리아+사람인은 사실상 단일 출처(채용 DB 공유)이므로 자동 검증됨 불가.
+    새 정책: '잡포털2중확인' 라벨로 격하."""
     res = decide({"jobkorea": ["02-1234-5678"], "saramin": ["02-1234-5678"]})
-    assert res.confidence == "검증됨"
+    assert res.confidence == "잡포털2중확인"
 
 
 def test_empty_returns_not_found():
