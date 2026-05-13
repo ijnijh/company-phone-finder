@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+# .streamlit 폴더 전체 가리기 (실제 secrets.toml은 GitHub에 절대 올리지 말 것),
+# 단 예시 파일은 추적 허용 (.streamlit/secrets.toml.example).
+.streamlit/*
+!.streamlit/secrets.toml.example
+samples/output_*.xlsx
+.pytest_cache/
