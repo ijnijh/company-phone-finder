@@ -122,24 +122,36 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
         if normalized and phone_mod.is_corporate(normalized):
             by_source["naver_local"] = [normalized]
 
-    # 2-2) 홈페이지 — 회사명을 함께 전달해 푸터 노이즈 차단
-    #      URL 우선순위: ① 네이버 지도가 그 회사로 인증한 link 필드
-    #                    ② naver_web.find_homepage가 검색으로 찾은 URL
+    # 2-2) 홈페이지 — 두 URL 후보 모두에서 추출 시도해 결과 합침
+    #   ① 네이버 지도의 link 필드 (단, place.naver.com 같은 제외 도메인은 거부)
+    #   ② naver_web.find_homepage가 웹검색으로 찾은 URL
+    #   두 후보가 다른 URL이면 양쪽 다 fetch — 어느 한쪽이 실패해도 다른 쪽이
+    #   백업이 되도록.
+    homepage_urls: list[str] = []
+    link = (chosen.item.link or "").strip()
+    if link and not naver_web.is_excluded_homepage_domain(link):
+        homepage_urls.append(link)
     try:
-        homepage_url = (chosen.item.link or "").strip()
-        if homepage_url:
-            log_fn(f"[{company}] 지도 link 사용: {homepage_url}")
-        else:
-            homepage_url = naver_web.find_homepage(company)
-            if homepage_url:
-                log_fn(f"[{company}] 웹검색 홈페이지: {homepage_url}")
-        if homepage_url:
-            phones = company_homepage.fetch_phones(homepage_url, company_name=company)
-            if phones:
-                by_source["homepage"] = phones
-                log_fn(f"[{company}] 홈페이지 후보 {len(phones)}건")
+        searched = naver_web.find_homepage(company)
+        if searched and searched not in homepage_urls:
+            homepage_urls.append(searched)
     except Exception as e:
-        log_fn(f"[{company}] 홈페이지 추출 오류: {e}")
+        log_fn(f"[{company}] find_homepage 오류: {e}")
+
+    all_home_phones: list[str] = []
+    for hu in homepage_urls:
+        try:
+            phones = company_homepage.fetch_phones(hu, company_name=company)
+            if phones:
+                log_fn(f"[{company}] 홈페이지({hu}) 후보 {len(phones)}건")
+                for p in phones:
+                    if p not in all_home_phones:
+                        all_home_phones.append(p)
+        except Exception as e:
+            log_fn(f"[{company}] 홈페이지 추출 오류({hu}): {e}")
+
+    if all_home_phones:
+        by_source["homepage"] = all_home_phones[:3]
 
     # 2-3) 잡코리아·사람인 — ICP 양성 신호가 있을 때만 (음식점·미용실 노이즈 차단)
     has_positive_icp = chosen.detail.get("icp_pos_keywords", 0) >= 1
@@ -184,7 +196,12 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
     if by_source.get("homepage"):
         diag_parts.append(f"홈페이지={by_source['homepage'][0]}")
     else:
-        diag_parts.append("홈페이지=∅")
+        # 빈 결과일 때 URL 후보 자체가 있었는지 표시
+        if homepage_urls:
+            urls_short = ", ".join(_short_url(u) for u in homepage_urls[:2])
+            diag_parts.append(f"홈페이지=∅(시도:{urls_short})")
+        else:
+            diag_parts.append("홈페이지=∅(URL미발견)")
     if by_source.get("jobkorea"):
         diag_parts.append(f"잡코리아={by_source['jobkorea'][0]}")
     if by_source.get("saramin"):
@@ -265,3 +282,12 @@ def _source_label(source: str) -> str:
         "jobkorea": "잡코리아",
         "saramin": "사람인",
     }.get(source, source)
+
+
+def _short_url(url: str) -> str:
+    """진단 표시용 — 도메인만."""
+    try:
+        from urllib.parse import urlparse
+        return urlparse(url).netloc or url[:30]
+    except Exception:
+        return url[:30]

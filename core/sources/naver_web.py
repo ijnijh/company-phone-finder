@@ -97,6 +97,25 @@ def search(query: str, display: int = 10, timeout: float = 8.0) -> list[WebItem]
     ]
 
 
+def is_excluded_homepage_domain(url: str) -> bool:
+    """공식 홈페이지 후보에서 제외할 도메인인지 검사 (외부 사용 가능).
+
+    네이버 지도가 link 필드로 종종 'place.naver.com/...' 같은 URL을 주는데,
+    이건 회사 공식 홈페이지가 아닌 네이버 플레이스 페이지라 거기서 회사 대표
+    번호를 추출할 수 없다. pipeline 단계에서 이 함수로 link 필드 검증.
+    """
+    if not url:
+        return True
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc.lower()
+        if not domain:
+            return True
+    except Exception:
+        return True
+    return any(domain == d or domain.endswith("." + d) for d in _EXCLUDE_DOMAINS)
+
+
 def find_homepage(company_name: str, timeout: float = 8.0) -> str:
     """업체명으로 검색해 **공식 홈페이지로 강하게 추정되는** 첫 URL을 반환.
 
