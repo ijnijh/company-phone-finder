@@ -58,22 +58,22 @@ def fetch_phones(company_name: str, timeout: float = 8.0) -> list[str]:
 
 
 def _verify_company_match(tree: HTMLParser, company_name: str) -> bool:
-    """상세 페이지의 회사명 표시 영역에 검색어 토큰이 등장하는지 검증.
+    """상세 페이지의 회사명 표시 영역에 검색어 토큰이 등장하는지 **엄격** 검증.
 
-    검사 영역(우선순위):
-    - <title> 태그
-    - <h1>, <h2>, .company-name, .corp-name, [class*="company"] 등 회사명 영역
-    - 페이지 상단 첫 2000자
+    페이지 본문은 광고·관련 회사 추천 등으로 노이즈가 많아 토큰이 우연히
+    포함될 수 있으므로 다음 좁은 영역만 검사한다:
+      - <title> 태그
+      - <h1>, <h2> 헤더
+      - 회사명 전용 클래스 (.company-name, .corp-name, [class*="company"] 등)
 
-    검사 토큰: 회사명 정규화 후 전체 + 앞 2글자 약칭.
+    토큰은 회사명 핵심 단어 (앞 2자 약칭은 제외 — 너무 자주 우연 매칭).
     """
     if not tree:
         return False
-    tokens = _company_tokens(company_name)
+    tokens = _strict_company_tokens(company_name)
     if not tokens:
-        return True  # 비정상적 짧은 이름이면 검증 통과
+        return True
 
-    # 검사할 텍스트 후보 수집
     haystacks: list[str] = []
     try:
         title_node = tree.css_first("title")
@@ -82,7 +82,8 @@ def _verify_company_match(tree: HTMLParser, company_name: str) -> bool:
     except Exception:
         pass
     for sel in ("h1", "h2", ".company-name", ".corp-name",
-                "[class*='company']", "[class*='corp']", "[class*='Corp']"):
+                "[class*='company']", "[class*='corp']", "[class*='Corp']",
+                "[class*='Name']", "[class*='name']"):
         try:
             for n in tree.css(sel)[:5]:
                 t = n.text(strip=True)
@@ -90,19 +91,29 @@ def _verify_company_match(tree: HTMLParser, company_name: str) -> bool:
                     haystacks.append(t)
         except Exception:
             continue
-    # fallback: 페이지 상단 첫 2000자
-    try:
-        body = tree.body or tree
-        head_text = body.text(separator=" ", strip=True)[:2000]
-        haystacks.append(head_text)
-    except Exception:
-        pass
 
     big = " ".join(haystacks).lower()
-    for t in tokens:
-        if t in big:
-            return True
-    return False
+    return any(t in big for t in tokens)
+
+
+def _strict_company_tokens(name: str) -> set[str]:
+    """엄격 검증용 토큰 — 약칭(앞 2자) 같이 우연 매칭 가능한 것은 제외."""
+    cleaned = _NAME_NOISE.sub("", name).strip()
+    if not cleaned:
+        return set()
+    out: set[str] = set()
+    low = cleaned.lower()
+    out.add(low)
+    no_space = re.sub(r"\s+", "", low)
+    out.add(no_space)
+    # 단어 단위 토큰 (영문 회사명 분리용) — 단, 3글자 이상만
+    for w in re.split(r"\W+", low):
+        if len(w) >= 3:
+            out.add(w)
+    # 한글 회사명은 4글자 이상이면 앞 3글자(약칭이 아닌 의미있는 부분)도 인정
+    if len(no_space) >= 5 and re.match(r"^[가-힣]+$", no_space):
+        out.add(no_space[:3])
+    return out
 
 
 _NAME_NOISE = re.compile(r"\(주\)|주식회사|㈜|\(유\)|유한회사")

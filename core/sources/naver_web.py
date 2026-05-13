@@ -100,10 +100,12 @@ def search(query: str, display: int = 10, timeout: float = 8.0) -> list[WebItem]
 def find_homepage(company_name: str, timeout: float = 8.0) -> str:
     """업체명으로 검색해 **공식 홈페이지로 강하게 추정되는** 첫 URL을 반환.
 
-    검증 강화 (2026-05):
-    - 알려진 제외 도메인(블로그·뉴스·잡포털·SNS·마켓플레이스 등) 차단
-    - 회사명 핵심 토큰이 **도메인 또는 페이지 제목**에 등장하는 결과만 채택
-      (광고 LP, 무관한 회사 비교 페이지 등을 걸러냄)
+    검증 단계 (2026-05 개정):
+    1) 알려진 제외 도메인(블로그·뉴스·잡포털·SNS·마켓플레이스) 차단
+    2) 회사명 핵심 토큰이 도메인 또는 페이지 제목에 있으면 즉시 채택
+    3) 둘 다 매칭 안 되지만 첫 1~3개 후보는 **페이지를 직접 열어** 본문에서
+       회사명 토큰이 발견되면 채택 (한국 회사의 영문 도메인 케이스 — 예:
+       로젠택배→ilogen.com, 쿠팡→coupang.com이 거부되던 결함 해결)
     """
     if not company_name.strip():
         return ""
@@ -115,21 +117,62 @@ def find_homepage(company_name: str, timeout: float = 8.0) -> str:
     ]
     norm_tokens = _name_tokens(company_name)
 
+    body_check_budget = 3  # 본문 검증에 쓸 fetch 횟수 (속도 제한)
+
     for q in queries:
         try:
             items = search(q, display=10, timeout=timeout)
         except NaverWebError:
             continue
+
+        # 1·2단계: 도메인/제목 매칭으로 빠르게 채택
         for item in items:
             domain = item.domain
             if not domain:
                 continue
             if any(domain == d or domain.endswith("." + d) for d in _EXCLUDE_DOMAINS):
                 continue
-            if not _looks_like_official(item, domain, norm_tokens):
+            if _looks_like_official(item, domain, norm_tokens):
+                return item.link
+
+        # 3단계: 도메인/제목 매칭 모두 실패한 후보를 본문으로 검증
+        for item in items:
+            if body_check_budget <= 0:
+                break
+            domain = item.domain
+            if not domain:
                 continue
-            return item.link
+            if any(domain == d or domain.endswith("." + d) for d in _EXCLUDE_DOMAINS):
+                continue
+            # 이미 1단계에서 통과했으면 안 옴 (return으로 빠져나감) — 여기 도달한 건 검증 실패한 후보
+            if _body_contains_company(item.link, norm_tokens, timeout):
+                return item.link
+            body_check_budget -= 1
+
     return ""
+
+
+def _body_contains_company(url: str, tokens: set[str], timeout: float) -> bool:
+    """URL을 fetch해서 페이지 본문 첫 10KB에 회사명 토큰이 등장하는지."""
+    if not tokens or not url:
+        return False
+    try:
+        with httpx.Client(
+            follow_redirects=True, timeout=timeout, verify=False,
+            headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "ko-KR,ko;q=0.9"},
+        ) as client:
+            resp = client.get(url)
+            if resp.status_code >= 400:
+                return False
+            body = resp.content[:50_000]
+    except Exception:
+        return False
+    # 단순 substring 매칭 (HTML 태그 안 + 텍스트 모두 포함)
+    try:
+        text = body.decode("utf-8", errors="ignore").lower()
+    except Exception:
+        return False
+    return any(t in text for t in tokens)
 
 
 # 법인 형태 표기만 제거 (공백은 보존 — 영문 토큰 분리에 필요)

@@ -54,8 +54,19 @@ _MAX_PAGES = 4
 
 
 def fetch_phones(url: str, company_name: str = "", timeout: float = 8.0) -> list[str]:
-    """홈페이지에서 회사 대표번호 후보 반환. 메인 페이지에서 발견 시 contact 페이지
-    추가 fetch는 생략 (속도 + 노이즈 최소화)."""
+    """홈페이지에서 회사 대표번호 후보 반환.
+
+    중요 정책 (2026-05 개정):
+    - contact 페이지를 **항상** 탐색해서 우선순위 위쪽에 둔다.
+      (메인 푸터에는 그룹 통합 콜센터가 박혀있고 본사 직통은 contact us
+       페이지에만 있는 케이스 — 동원로엑스 — 를 잡기 위함)
+    - 발견 순서:
+        ① contact 페이지의 회사명 컨텍스트 매칭 번호  (가장 신뢰)
+        ② contact 페이지의 JSON-LD / tel / 푸터 / 본문 번호
+        ③ 메인 페이지의 JSON-LD / tel
+        ④ 메인 페이지의 회사명 컨텍스트 매칭 번호
+        ⑤ 메인 페이지의 푸터 번호
+    """
     if not url:
         return []
 
@@ -73,48 +84,47 @@ def fetch_phones(url: str, company_name: str = "", timeout: float = 8.0) -> list
     if tree is None:
         return []
 
-    # 1) JSON-LD telephone (가장 신뢰)
+    # ─── contact 페이지 우선 탐색 ──────────────────────────────────
+    contact_urls = _discover_contact_urls(tree, url)
+    if not contact_urls:
+        origin = _origin(url)
+        if origin:
+            contact_urls = [urljoin(origin, p) for p in _STATIC_PATHS]
+
+    visited: set[str] = {url}
+    for cu in contact_urls:
+        if len(visited) >= _MAX_PAGES:
+            break
+        if cu in visited or not cu:
+            continue
+        visited.add(cu)
+        page_bytes, page_tree, page_text = _fetch(cu, timeout)
+        if page_tree is None:
+            continue
+        # ① contact 페이지의 회사명 컨텍스트 (가장 신뢰)
+        if page_text:
+            ctx = extract_phones_with_context(page_text, company_name=company_name, radius=400)
+            if ctx:
+                _ingest(ctx)
+        # ② contact 페이지의 JSON-LD/tel/푸터
+        _ingest(_extract_jsonld_phones(page_bytes or b""))
+        _ingest(_extract_tel_links(page_tree))
+        _ingest(_extract_from_footer(page_tree))
+
+    # ─── 메인 페이지 추출 ─────────────────────────────────────────
+    # ③ JSON-LD
     _ingest(_extract_jsonld_phones(base_html_bytes or b""))
-
-    # 2) tel: 링크
+    # ③ tel: 링크
     _ingest(_extract_tel_links(tree))
-
-    # 3) 푸터 영역 우선 추출 (회사명/라벨 컨텍스트 없이도 채택)
-    _ingest(_extract_from_footer(tree))
-
-    # 4) 본문에서 회사명/라벨 컨텍스트 추출
+    # ④ 메인 본문 회사명 컨텍스트
     if body_text:
         ctx = extract_phones_with_context(body_text, company_name=company_name, radius=400)
         if ctx:
             _ingest(ctx)
+    # ⑤ 메인 푸터 (가장 후순위 — 그룹 통합 콜센터 같은 노이즈 가능성)
+    _ingest(_extract_from_footer(tree))
 
-    # 5) 그래도 빈 결과면 contact 페이지 탐색 (보조)
-    if not collected:
-        contact_urls = _discover_contact_urls(tree, url)
-        if not contact_urls:
-            origin = _origin(url)
-            if origin:
-                contact_urls = [urljoin(origin, p) for p in _STATIC_PATHS]
-
-        visited: set[str] = {url}
-        for cu in contact_urls:
-            if len(visited) >= _MAX_PAGES:
-                break
-            if cu in visited or not cu:
-                continue
-            visited.add(cu)
-            page_bytes, page_tree, page_text = _fetch(cu, timeout)
-            if page_tree is None:
-                continue
-            _ingest(_extract_jsonld_phones(page_bytes or b""))
-            _ingest(_extract_tel_links(page_tree))
-            _ingest(_extract_from_footer(page_tree))
-            if page_text:
-                ctx = extract_phones_with_context(page_text, company_name=company_name, radius=400)
-                if ctx:
-                    _ingest(ctx)
-
-    # 6) 블랙리스트 + 상위 3건
+    # 블랙리스트 + 상위 3건
     return filter_phones(collected)[:3]
 
 

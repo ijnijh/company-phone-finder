@@ -52,9 +52,10 @@ def fetch_phones(company_name: str, timeout: float = 8.0) -> list[str]:
 
 
 def _verify_company_match(tree: HTMLParser, company_name: str) -> bool:
+    """jobkorea와 동일: <title>/<h1>/회사명 클래스만 검사 (본문 광고 노이즈 회피)."""
     if not tree:
         return False
-    tokens = _company_tokens(company_name)
+    tokens = _strict_company_tokens(company_name)
     if not tokens:
         return True
     haystacks: list[str] = []
@@ -65,7 +66,8 @@ def _verify_company_match(tree: HTMLParser, company_name: str) -> bool:
     except Exception:
         pass
     for sel in ("h1", "h2", ".company-name", ".corp-name",
-                "[class*='company']", "[class*='corp']", "[class*='Corp']"):
+                "[class*='company']", "[class*='corp']", "[class*='Corp']",
+                "[class*='Name']", "[class*='name']"):
         try:
             for n in tree.css(sel)[:5]:
                 t = n.text(strip=True)
@@ -73,13 +75,25 @@ def _verify_company_match(tree: HTMLParser, company_name: str) -> bool:
                     haystacks.append(t)
         except Exception:
             continue
-    try:
-        body = tree.body or tree
-        haystacks.append(body.text(separator=" ", strip=True)[:2000])
-    except Exception:
-        pass
     big = " ".join(haystacks).lower()
     return any(t in big for t in tokens)
+
+
+def _strict_company_tokens(name: str) -> set[str]:
+    cleaned = _NAME_NOISE.sub("", name).strip()
+    if not cleaned:
+        return set()
+    out: set[str] = set()
+    low = cleaned.lower()
+    out.add(low)
+    no_space = re.sub(r"\s+", "", low)
+    out.add(no_space)
+    for w in re.split(r"\W+", low):
+        if len(w) >= 3:
+            out.add(w)
+    if len(no_space) >= 5 and re.match(r"^[가-힣]+$", no_space):
+        out.add(no_space[:3])
+    return out
 
 
 _NAME_NOISE = re.compile(r"\(주\)|주식회사|㈜|\(유\)|유한회사")
