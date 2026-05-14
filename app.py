@@ -254,6 +254,12 @@ if st.button("🔎 검색 시작", type="primary"):
     rows = []
     for r in parsed.rows:
         info = results_main.get(r.row_index, {})
+        # ICP점수는 숫자 또는 None — 빈 문자열 섞여 dataframe 표시 시 ArrowInvalid 방지
+        icp_raw = info.get("ICP점수", "")
+        try:
+            icp_val = float(icp_raw) if icp_raw not in ("", None) else None
+        except (TypeError, ValueError):
+            icp_val = None
         rows.append({
             "업체명": r.company_name,
             "매칭상태": info.get("매칭상태", ""),
@@ -264,7 +270,7 @@ if st.button("🔎 검색 시작", type="primary"):
             "주소_시도": info.get("주소_시도", ""),
             "주소_시군구": info.get("주소_시군구", ""),
             "주소_동": info.get("주소_동", ""),
-            "ICP점수": info.get("ICP점수", ""),
+            "ICP점수": icp_val,
             "후보번호": info.get("후보번호", ""),
             "비고": info.get("비고", ""),
         })
