@@ -13,6 +13,7 @@ from core.phone import canonical, normalize
 SOURCE_WEIGHTS: dict[str, int] = {
     "llm": 4,
     "naver_local": 3,
+    "kakao_local": 3,  # 카카오맵: 네이버지도와 동등한 권위 (다른 데이터셋)
     "homepage": 2,
     "naver_snippet": 2,
     "jobkorea": 1,
@@ -69,7 +70,7 @@ def decide(by_source: dict[str, list[str]]) -> VerifyResult:
 
 
 _JOB_PORTAL_SOURCES = {"jobkorea", "saramin"}
-_AUTHORITY_SOURCES = {"llm", "naver_local", "homepage", "naver_snippet"}
+_AUTHORITY_SOURCES = {"llm", "naver_local", "kakao_local", "homepage", "naver_snippet"}
 
 
 def _confidence_label(best: dict) -> str:
@@ -101,6 +102,8 @@ def _confidence_label(best: dict) -> str:
         return "AI확인"
     if src == "naver_local":
         return "지도확인"
+    if src == "kakao_local":
+        return "카카오맵확인"
     if src == "homepage":
         return "홈페이지확인"
     if src == "naver_snippet":

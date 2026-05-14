@@ -26,6 +26,20 @@ streamlit run app.py
 3. 발급된 Client ID / Client Secret을 `.env`에 붙여넣기
 4. 무료 한도: 25,000 calls/day (업체 100개 처리 시 약 200콜 사용)
 
+## 카카오맵 API (선택, 추천)
+
+네이버 지도와 다른 데이터셋. 작은 회사·지방 회사 보강에 효과적입니다.
+
+1. https://developers.kakao.com 로그인 → "내 애플리케이션" → "애플리케이션 추가하기"
+2. 앱 이름 입력 (예: `company-phone-finder`) → 저장
+3. 앱 설정 → **앱 키** → **REST API 키** 복사
+4. `.env` 또는 Streamlit Cloud Secrets에 추가:
+   ```
+   KAKAO_REST_API_KEY=발급받은_REST_API_키
+   ```
+5. 무료 한도: 300,000 calls/day (200개 회사 처리 = 200콜)
+6. 키 미설정 시 카카오맵 단계 자동 생략.
+
 ## Claude AI 추출 (선택, 강력 추천)
 
 홈페이지 페이지 텍스트를 Claude AI에게 분석시켜 본사 대표번호를 직접 추출합니다.

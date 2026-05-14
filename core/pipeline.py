@@ -17,6 +17,7 @@ from core.query_preprocessor import expand_query_candidates
 from core.sources import (
     company_homepage,
     jobkorea,
+    kakao_local,
     llm_extractor,
     naver_local,
     naver_web,
@@ -151,6 +152,16 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
         if normalized and phone_mod.is_corporate(normalized):
             by_source["naver_local"] = [normalized]
 
+    # 2-1b) 카카오맵 — 네이버 지도와 보완적 데이터셋
+    if kakao_local.is_available():
+        try:
+            kakao_phones = kakao_local.fetch_phones(company, hints=hints)
+            if kakao_phones:
+                by_source["kakao_local"] = kakao_phones
+                log_fn(f"[{company}] 카카오맵 후보 {len(kakao_phones)}건")
+        except Exception as e:
+            log_fn(f"[{company}] 카카오맵 오류: {e}")
+
     # 2-2) 홈페이지 — 두 URL 후보 모두에서 추출 시도해 결과 합침
     #   ① 네이버 지도의 link 필드 (단, place.naver.com 같은 제외 도메인은 거부)
     #   ② naver_web.find_homepage가 웹검색으로 찾은 URL
@@ -238,7 +249,13 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
     if (
         match.status == "매칭확정"
         and chosen.detail.get("icp_pos_keywords", 0) >= 1
-        and verify.confidence in ("AI확인", "지도확인", "홈페이지확인", "검색결과확인")
+        and verify.confidence in (
+            "AI확인",
+            "지도확인",
+            "카카오맵확인",
+            "홈페이지확인",
+            "검색결과확인",
+        )
     ):
         verify.confidence = "검증됨"
         promoted = True
@@ -257,6 +274,10 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
         diag_parts.append(f"지도={by_source['naver_local'][0]}")
     else:
         diag_parts.append("지도=∅")
+    if by_source.get("kakao_local"):
+        diag_parts.append(f"카카오={by_source['kakao_local'][0]}")
+    elif kakao_local.is_available():
+        diag_parts.append("카카오=∅")
     if by_source.get("homepage"):
         diag_parts.append(f"홈페이지={by_source['homepage'][0]}")
     else:
@@ -345,6 +366,7 @@ def _source_label(source: str) -> str:
     return {
         "llm": "AI",
         "naver_local": "지도",
+        "kakao_local": "카카오맵",
         "homepage": "홈페이지",
         "naver_snippet": "검색결과",
         "jobkorea": "잡코리아",
