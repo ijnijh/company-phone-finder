@@ -13,6 +13,7 @@ from core import phone as phone_mod
 from core.entity_matcher import MatchResult, ScoredCandidate, select as entity_select
 from core.excel_io import ExcelInput, InputRow
 from core.icp import IcpConfig, load_config
+from core.query_preprocessor import expand_query_candidates
 from core.sources import (
     company_homepage,
     jobkorea,
@@ -85,14 +86,35 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
     log_fn(f"[{company}] 시작")
 
     # 단계 1: Entity matching (네이버 지도)
-    try:
-        items = naver_local.search(company, display=5)
-    except Exception as e:
-        log_fn(f"[{company}] 네이버 지도 API 오류: {e}")
-        return _failure_result(row, f"네이버 지도 API 오류: {e}")
-
+    # 검색어 후보 순차 시도 — "이마트 (물류본부)" → "이마트" fallback
+    query_candidates = expand_query_candidates(company)
     hints = {"region": row.region_hint, "category": row.category_hint}
-    match: MatchResult = entity_select(company, items, hints, config)
+
+    match: MatchResult | None = None
+    used_query = company
+    for q in query_candidates:
+        try:
+            items = naver_local.search(q, display=5)
+        except Exception as e:
+            log_fn(f"[{company}] 네이버 지도 API 오류 ({q}): {e}")
+            continue
+        if not items:
+            continue
+        # 매칭 시도 — entity_select에는 원본 회사명을 전달 (정확매칭 강도 평가용)
+        candidate_match = entity_select(company, items, hints, config)
+        if candidate_match.status in ("매칭확정", "확정필요"):
+            match = candidate_match
+            used_query = q
+            if q != company:
+                log_fn(f"[{company}] 검색어 정규화 매칭 성공: '{q}'")
+            break
+        elif match is None:
+            # 약한 매칭이라도 임시 저장 (모든 후보가 약하면 이걸 사용)
+            match = candidate_match
+            used_query = q
+
+    if match is None:
+        return _failure_result(row, "네이버 지도 검색 결과 없음 (모든 후보 실패)")
 
     candidates_dump = _build_candidates_dump(match)
 

@@ -13,7 +13,13 @@ from core.icp import IcpConfig, score_category
 from core.sources.naver_local import LocalItem
 
 # 명칭 정규화에서 제거할 토큰
-_NAME_NOISE_RE = re.compile(r"\(주\)|주식회사|㈜|\(유\)|유한회사|\(재\)|재단법인|\(사\)|사단법인|\s+")
+# 회사 형태 표기 + 일반 괄호 안 내용 + 공백 모두 제거
+# → "이마트 (물류본부)" / "이마트" 둘 다 정규화 후 "이마트"로 동일
+_NAME_NOISE_RE = re.compile(
+    r"\(주\)|주식회사|㈜|\(유\)|유한회사|\(재\)|재단법인|\(사\)|사단법인"
+    r"|[(（][^()（）]*[)）]"  # 일반 괄호와 그 내부 (부서명·별칭 제거용)
+    r"|\s+"
+)
 _BRANCH_MARKERS = ("지점", "영업소", "출장소", "센터", "매장", "지사", "사무소")
 _HEADQUARTERS_MARKERS = ("본사", "본점", "주식회사", "(주)", "㈜")
 
