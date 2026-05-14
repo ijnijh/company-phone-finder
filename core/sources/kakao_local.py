@@ -89,8 +89,12 @@ def fetch_phones(company_name: str, hints: dict | None = None, timeout: float = 
     회사명 정규화 매칭 + (있다면) 지역 힌트 일치로 정확도 보강.
     각 결과의 phone 필드만 사용 — 추가 페이지 fetch 없음.
     """
+    import logging
+
     from core.blacklist import filter_phones
     from core.phone import is_corporate, normalize
+
+    log = logging.getLogger(__name__)
 
     if not company_name or not company_name.strip():
         return []
@@ -98,36 +102,45 @@ def fetch_phones(company_name: str, hints: dict | None = None, timeout: float = 
         return []
 
     try:
-        places = search(company_name, size=5, timeout=timeout)
-    except KakaoLocalError:
+        places = search(company_name, size=15, timeout=timeout)
+    except KakaoLocalError as e:
+        log.warning("[kakao_local] API 오류 %s: %s", company_name, e)
         return []
-    except Exception:
+    except Exception as e:
+        log.warning("[kakao_local] 예외 %s: %s", company_name, e)
         return []
 
     if not places:
+        log.debug("[kakao_local] %s: 검색 결과 0건", company_name)
         return []
+
+    log.debug("[kakao_local] %s: 검색 결과 %d건", company_name, len(places))
 
     norm_query = _NAME_NOISE_RE.sub("", company_name).lower()
     region_hint = (hints or {}).get("region", "").strip()
 
-    candidates: list[tuple[int, str]] = []  # (점수, 정규화된 번호)
+    candidates: list[tuple[int, str]] = []
+    rejected_count = 0
+    no_phone_count = 0
     for p in places:
         if not p.phone:
+            no_phone_count += 1
             continue
-        # 회사명 매칭 점수
+        # 회사명 매칭 점수 — 완화: 토큰 일치도 약하게 인정
         norm_place = _NAME_NOISE_RE.sub("", p.place_name).lower()
         score = 0
         if norm_place == norm_query:
             score += 3
         elif norm_query and (norm_query in norm_place or norm_place in norm_query):
-            score += 1
-        elif norm_query:
-            # 토큰 일부라도 겹치면 약하게
-            tokens = [t for t in norm_query.split() if len(t) >= 2]
-            if tokens and any(t in norm_place for t in tokens):
-                score += 0  # 약한 매치 (제외 대상)
-        # 회사명 매칭이 약하면 후보에서 제외
+            score += 2
+        else:
+            # 토큰 부분 일치도 인정 (이전엔 score=0이라 제외됐음 — 완화)
+            tokens = [t for t in re.split(r"\W+", norm_query) if len(t) >= 2]
+            matched = sum(1 for t in tokens if t in norm_place)
+            if matched >= 1 and tokens:
+                score += 1
         if score == 0:
+            rejected_count += 1
             continue
         # 지역 힌트 일치 시 가산점
         if region_hint:
@@ -144,6 +157,11 @@ def fetch_phones(company_name: str, hints: dict | None = None, timeout: float = 
         ph = normalize(p.phone)
         if ph and is_corporate(ph):
             candidates.append((score, ph))
+
+    log.debug(
+        "[kakao_local] %s: phone없음=%d, 회사명미일치=%d, 채택=%d",
+        company_name, no_phone_count, rejected_count, len(candidates),
+    )
 
     if not candidates:
         return []
