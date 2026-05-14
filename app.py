@@ -170,6 +170,7 @@ def _confidence_summary(results: dict[int, dict]) -> dict[str, int]:
         "AI확인": 0,
         "지도확인": 0,
         "홈페이지확인": 0,
+        "검색결과확인": 0,
         "잡포털확인": 0,
         "찾지못함": 0,
     }
@@ -218,13 +219,14 @@ if st.button("🔎 검색 시작", type="primary"):
     # 신뢰도(전화번호 교차검증) 분포
     conf = _confidence_summary(results_main)
     st.markdown("**전화번호 신뢰도 분포**")
-    ccols = st.columns(6)
+    ccols = st.columns(7)
     ccols[0].metric("검증됨", conf["검증됨"], help="2개 이상 소스 일치 또는 권위소스 격상")
     ccols[1].metric("AI확인", conf["AI확인"], help="Claude AI 단독 (홈페이지 텍스트 분석)")
     ccols[2].metric("지도확인", conf["지도확인"], help="네이버 지도 단독")
     ccols[3].metric("홈페이지확인", conf["홈페이지확인"], help="공식 홈페이지 단독")
-    ccols[4].metric("잡포털확인", conf["잡포털확인"], help="잡코리아·사람인 단독")
-    ccols[5].metric("찾지못함", conf["찾지못함"])
+    ccols[4].metric("검색결과확인", conf["검색결과확인"], help="네이버 웹 검색 스니펫")
+    ccols[5].metric("잡포털확인", conf["잡포털확인"], help="잡코리아·사람인 단독")
+    ccols[6].metric("찾지못함", conf["찾지못함"])
 
     # 결과 미리보기
     rows = []

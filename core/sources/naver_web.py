@@ -116,6 +116,53 @@ def is_excluded_homepage_domain(url: str) -> bool:
     return any(domain == d or domain.endswith("." + d) for d in _EXCLUDE_DOMAINS)
 
 
+def snippet_phones(company_name: str, timeout: float = 8.0) -> list[str]:
+    """네이버 웹 검색 결과의 설명(description) 스니펫에서 회사명 컨텍스트 안 번호 추출.
+
+    네이버 지도에 등록 안 된 작은 회사도 웹 검색 스니펫에 "OO회사 - 대표 02-..."
+    형식으로 정보가 자주 노출됨. 검색 쿼리를 다양화해서 전화번호 노출 페이지를
+    상위로 끌어올린다.
+    """
+    from core.blacklist import filter_phones
+    from core.phone import extract_phones_with_context, is_corporate
+
+    if not company_name.strip():
+        return []
+
+    # 전화번호가 스니펫에 노출될 가능성이 높은 쿼리들
+    queries = [
+        f"{company_name} 대표전화",
+        f"{company_name} 본사 전화번호",
+        f"{company_name} 연락처",
+        f"{company_name} 고객센터",
+    ]
+
+    collected: list[str] = []
+    seen: set[str] = set()
+
+    for q in queries:
+        try:
+            items = search(q, display=5, timeout=timeout)
+        except NaverWebError:
+            continue
+        except Exception:
+            continue
+        for item in items:
+            # 제목 + 설명 텍스트에서 회사명 주변 번호 추출
+            haystack = f"{item.title}\n{item.description}"
+            for ph in extract_phones_with_context(
+                haystack, company_name=company_name, radius=200
+            ):
+                if not is_corporate(ph):
+                    continue
+                if ph in seen:
+                    continue
+                seen.add(ph)
+                collected.append(ph)
+
+    return filter_phones(collected)[:3]
+
+
 def find_homepage(company_name: str, timeout: float = 8.0) -> str:
     """업체명으로 검색해 **공식 홈페이지로 강하게 추정되는** 첫 URL을 반환.
 

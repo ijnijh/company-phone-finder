@@ -8,10 +8,13 @@ from core.phone import canonical, normalize
 
 # 소스명 → 가중치 (높을수록 신뢰)
 # llm은 페이지 맥락을 이해한 결과라 가장 신뢰
+# naver_snippet은 네이버 웹 검색의 짧은 스니펫 — 정보가 압축돼 있어 정확하나 라벨이
+# 없는 경우가 있어 중간 가중치
 SOURCE_WEIGHTS: dict[str, int] = {
     "llm": 4,
     "naver_local": 3,
     "homepage": 2,
+    "naver_snippet": 2,
     "jobkorea": 1,
     "saramin": 1,
 }
@@ -66,7 +69,7 @@ def decide(by_source: dict[str, list[str]]) -> VerifyResult:
 
 
 _JOB_PORTAL_SOURCES = {"jobkorea", "saramin"}
-_AUTHORITY_SOURCES = {"llm", "naver_local", "homepage"}
+_AUTHORITY_SOURCES = {"llm", "naver_local", "homepage", "naver_snippet"}
 
 
 def _confidence_label(best: dict) -> str:
@@ -100,6 +103,8 @@ def _confidence_label(best: dict) -> str:
         return "지도확인"
     if src == "homepage":
         return "홈페이지확인"
+    if src == "naver_snippet":
+        return "검색결과확인"
     if src in _JOB_PORTAL_SOURCES:
         return "잡포털확인"
     return "찾지못함"

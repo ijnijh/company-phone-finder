@@ -182,6 +182,15 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
     if all_home_phones:
         by_source["homepage"] = all_home_phones[:3]
 
+    # 2-2b) 네이버 웹 검색 스니펫 — 네이버 지도 미등록 작은 회사에 효과적
+    try:
+        snippet_phones = naver_web.snippet_phones(company)
+        if snippet_phones:
+            by_source["naver_snippet"] = snippet_phones
+            log_fn(f"[{company}] 웹검색 스니펫 후보 {len(snippet_phones)}건")
+    except Exception as e:
+        log_fn(f"[{company}] 웹검색 스니펫 오류: {e}")
+
     # 2-3) LLM 추출 — Claude AI가 홈페이지 텍스트를 직접 분석해 본사 대표번호 추출
     #      (정규식 룰의 사각지대 — 라벨 변형·그룹 콜센터·잘못된 페이지 매칭 등 해결)
     if llm_extractor.is_available() and homepage_urls:
@@ -229,7 +238,7 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
     if (
         match.status == "매칭확정"
         and chosen.detail.get("icp_pos_keywords", 0) >= 1
-        and verify.confidence in ("AI확인", "지도확인", "홈페이지확인")
+        and verify.confidence in ("AI확인", "지도확인", "홈페이지확인", "검색결과확인")
     ):
         verify.confidence = "검증됨"
         promoted = True
@@ -257,6 +266,8 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
             diag_parts.append(f"홈페이지=∅(시도:{urls_short})")
         else:
             diag_parts.append("홈페이지=∅(URL미발견)")
+    if by_source.get("naver_snippet"):
+        diag_parts.append(f"검색결과={by_source['naver_snippet'][0]}")
     if by_source.get("jobkorea"):
         diag_parts.append(f"잡코리아={by_source['jobkorea'][0]}")
     if by_source.get("saramin"):
@@ -335,6 +346,7 @@ def _source_label(source: str) -> str:
         "llm": "AI",
         "naver_local": "지도",
         "homepage": "홈페이지",
+        "naver_snippet": "검색결과",
         "jobkorea": "잡코리아",
         "saramin": "사람인",
     }.get(source, source)
