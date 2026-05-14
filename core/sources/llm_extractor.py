@@ -130,9 +130,32 @@ _SYSTEM_PROMPT = """당신은 한국 B2B 기업의 공식 홈페이지·contact 
 자회사 별도 번호가 페이지에 있다면 그것을 우선.
 
 ### C. 회사명이 페이지 어디에도 명확히 없을 때
-페이지 첫 1000자 안에 검색 회사명(또는 회사명 핵심 토큰)이 등장하지 않으면:
-- 검색이 잘못된 페이지로 연결됐을 가능성 매우 높음
-- **"없음" 반환** (잘못된 번호 제공보다 빈 결과가 안전)
+다음 신호 **모두** 부재하면 잘못된 페이지일 가능성 매우 높음 → **"없음" 반환**:
+1. 검색 회사명(한글 원형)이 페이지에 등장
+2. **회사명의 영문 표기/약칭이 페이지에 등장** (예: "CJ대한통운"의 영문 "CJ Logistics", "현대글로비스"의 "Hyundai Glovis", "한진"의 "Hanjin", "롯데글로벌로지스"의 "Lotte Global Logistics")
+3. 페이지 URL/도메인이 회사명과 명백히 연결됨 (예: cjlogistics.com, hyundai-glovis.com, hanjin.com — 페이지 출처가 사용자 메시지에 함께 제공됨)
+
+위 셋 중 **하나라도** 부합하면 회사 공식 페이지로 인정하고 본사 대표번호 추출 진행.
+
+특히 한국 대기업·중견기업은 영문 도메인 + 영문 콘텐츠로 공식 사이트를 운영하는 경우가 매우 흔함. 한글 회사명만 고집하지 말고 영문 변형·도메인 일치도 정체성 확인의 유효한 단서로 활용할 것.
+
+### C-2. 회사명 표기 변형 예시 (한글 → 영문/혼합)
+
+| 한글 검색 회사명 | 페이지에 이런 표기로 등장 가능 |
+|---|---|
+| CJ대한통운 | CJ Logistics, CJ Korea Express |
+| 현대글로비스 | Hyundai Glovis, GLOVIS |
+| 한진 | Hanjin Transportation, HANJIN |
+| 롯데글로벌로지스 | Lotte Global Logistics, LGL |
+| 쿠팡로지스틱스서비스 | Coupang Logistics Services, CLS |
+| LX판토스 | LX Pantos, PANTOS |
+| 동원로엑스 | Dongwon LOEX, LOEX |
+| 삼성SDS | Samsung SDS |
+| 포스코인터내셔널 | POSCO International |
+| 농협물류 | NH Logistics |
+| 한국전력공사 | KEPCO, Korea Electric Power |
+
+도메인이 위 영문 표기와 일치하면(`cjlogistics.com`, `glovis.net`, `hanjin.com`, `lotteglogis.com`, `coupangls.com`, `pantos.com`) **공식 사이트 확정**으로 처리.
 
 ### D. 신뢰가 낮은 라벨
 - "본사 02-1234-5678 (대표안내)" → 명확, 채택
@@ -236,6 +259,7 @@ def extract_phone_with_llm(
     page_text: str,
     api_key: str | None = None,
     timeout: float = 30.0,
+    page_url: str = "",
 ) -> str | None:
     """Claude AI에게 페이지 텍스트를 분석시켜 본사 대표번호 1개를 추출.
 
@@ -244,6 +268,7 @@ def extract_phone_with_llm(
         page_text: 홈페이지/contact 페이지 본문 텍스트 (HTML 태그 제거 상태)
         api_key: Anthropic API 키. None이면 ANTHROPIC_API_KEY 환경변수 사용
         timeout: API 호출 타임아웃 (초)
+        page_url: 페이지 URL (영문 도메인 회사 정체성 확인에 도움)
 
     Returns:
         정규화된 전화번호 문자열 (예: "02-1234-5678") 또는 None (찾지 못함/에러)
@@ -280,10 +305,13 @@ def extract_phone_with_llm(
                 {
                     "role": "user",
                     "content": (
-                        f"회사명: {company_name}\n\n"
-                        f"페이지 텍스트:\n{page_text}\n\n"
-                        f"위 회사의 본사 대표 전화번호를 반환하세요. "
-                        f"하이픈 형식 번호 1개 또는 '없음'만 답하세요. 다른 텍스트 금지."
+                        f"회사명: {company_name}\n"
+                        + (f"페이지 출처(URL): {page_url}\n" if page_url else "")
+                        + "\n"
+                        + f"페이지 텍스트:\n{page_text}\n\n"
+                        + "위 회사의 본사 대표 전화번호를 반환하세요. "
+                        + "도메인이나 영문 표기로 회사 정체성이 확인되면 번호 추출 진행. "
+                        + "하이픈 형식 번호 1개 또는 '없음'만 답하세요. 다른 텍스트 금지."
                     ),
                 }
             ],

@@ -193,7 +193,11 @@ def _process_one(row: InputRow, config: IcpConfig, log_fn: Callable[[str], None]
                     llm_text_chunks.append(text_blob)
             if llm_text_chunks:
                 combined_text = "\n\n".join(llm_text_chunks)
-                llm_phone = llm_extractor.extract_phone_with_llm(company, combined_text)
+                # URL도 함께 전달 — 영문 도메인(cjlogistics.com 등) 정체성 확인 단서
+                primary_url = homepage_urls[0] if homepage_urls else ""
+                llm_phone = llm_extractor.extract_phone_with_llm(
+                    company, combined_text, page_url=primary_url
+                )
                 if llm_phone:
                     by_source["llm"] = [llm_phone]
                     log_fn(f"[{company}] LLM 추출 성공: {llm_phone}")
